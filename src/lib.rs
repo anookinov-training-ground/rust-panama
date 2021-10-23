@@ -1,6 +1,20 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 
+// Flavors:
+//  - Synchronous channels: Channels where send() can block. Limited capacity.
+//   - Mutex + Condvar + VecDeque
+//   - Atomic VecDeque (atomic queue) + thread::park + thread::Thread::notify
+//  - Asynchronous channels: Channel where send() cannot block. Unbounded.
+//   - Mutex + Condvar + VecDeque
+//   - Mutex + Condvar + LinkedList
+//   - Atomic linked list, linked list of T
+//   - Atomic block linked list, linked list of atomic VecDeque<T>
+//  - Rendezvouz channels: Synchronous with capacity = 0. Used for thread synchronization.
+//  - Oneshot channels: Any capacity. In practice, only one call to send().
+
+// async/await
+
 pub struct Sender<T> {
     shared: Arc<Shared<T>>,
 }
@@ -39,14 +53,23 @@ impl<T> Sender<T> {
 
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
+    buffer: VecDeque<T>,
 }
 
 impl<T> Receiver<T> {
     pub fn recv(&mut self) -> Option<T> {
+        if let Some(t) = self.buffer.pop_front() {
+            return Some(t);
+        }
         let mut inner = self.shared.inner.lock().unwrap();
         loop {
             match inner.queue.pop_front() {
-                Some(t) => return Some(t),
+                Some(t) => {
+                    if !inner.queue.is_empty() {
+                        std::mem::swap(&mut self.buffer, &mut inner.queue);
+                    }
+                    return Some(t);
+                }
                 None if inner.senders == 0 => return None,
                 None => {
                     inner = self.shared.available.wait(inner).unwrap();
@@ -89,6 +112,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         },
         Receiver {
             shared: shared.clone(),
+            buffer: Default::default(),
         },
     )
 }
