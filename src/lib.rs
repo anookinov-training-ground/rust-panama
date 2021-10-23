@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn closed() {
         let (tx, mut rx) = channel::<()>();
-        let _ = tx;
+        drop(tx);
         assert_eq!(rx.recv(), None);
     }
 }
